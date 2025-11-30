@@ -792,14 +792,14 @@ def create_slab_from_index(
             
             # Save true_system (slab + adsorbate)
             true_system_path = os.path.join(output_dir, "true_system.cif")
-            write(true_system_path, true_system_atoms)
+            # write(true_system_path, true_system_atoms)
             
             # Extract and save true_slab (slab only, tags==0 or 1)
             slab_mask = (true_system_atoms.get_tags() == 0) | (true_system_atoms.get_tags() == 1)
             if np.any(slab_mask):
                 true_slab_atoms = true_system_atoms[slab_mask].copy()
                 true_slab_path = os.path.join(output_dir, "true_slab.cif")
-                write(true_slab_path, true_slab_atoms)
+                # write(true_slab_path, true_slab_atoms)
             else:
                 print(f"[WARNING] No slab atoms (tags 0 or 1) found in true_system")
         else:
@@ -821,6 +821,8 @@ def create_slab_from_index(
     miller_index = params["miller_index"]
     shift = params["shift"]
     top = params["top"]
+    
+    print("top:", top)
 
     # Step 3: Create Bulk from fairchem
     try:
@@ -830,8 +832,8 @@ def create_slab_from_index(
         raise ImportError("fairchem.data.oc.core is not available")
 
     bulk = Bulk(bulk_src_id_from_db=bulk_mpid)
-    if output_dir is not None:
-        write(f'{output_dir}/bulk.cif', bulk.atoms)
+    # if output_dir is not None:
+    #     write(f'{output_dir}/bulk.cif', bulk.atoms)
     
     # Step 4: Use compute_slabs to get shifted_ouc
     # Note: compute_slabs internally uses SlabGenerator with primitive reduction applied after slab generation
@@ -839,14 +841,12 @@ def create_slab_from_index(
         bulk_atoms=bulk.atoms,
         max_miller=max(np.abs(miller_index)),
         specific_millers=[miller_index],
-        min_slab_size=min_slab_size,
-        min_vacuum_size=min_vacuum_size,
     )
     
     # Filter by shift and top
     matching_untiled_slabs = [
         s for s in untiled_slabs
-        if abs(s[4] - shift) < 1e-3 and s[5] == top
+        if abs(s[2] - shift) < 1e-3 and s[3] == top
     ]
     if not matching_untiled_slabs:
         raise ValueError(
@@ -854,25 +854,22 @@ def create_slab_from_index(
             f"shift={shift}, top={top}"
         )
     
-    shifted_ouc, struct_with_vac, struct_no_vac, millers, shift, top = matching_untiled_slabs[0]
+    untiled_slab, miller, shift, top, ouc = matching_untiled_slabs[0]
+    
+    np.save(f"{index}_ouc_c_vector.npy", ouc.lattice.matrix[2])
+    
+    # write(f'{index}_untiled_slab.cif', AseAtomsAdaptor.get_atoms(struct_with_vac))
+    # write(f'{index}_shifted_oriented_unit_cell.cif', AseAtomsAdaptor.get_atoms(shifted_ouc))
 
-    # Decide whether to use struct_no_vac instead of shifted_ouc here
-    unit_slab = shifted_ouc
-    is_struct_no_vac = False
-    try:
-        if struct_no_vac is not None and len(struct_no_vac) < len(shifted_ouc):
-            unit_slab = struct_no_vac
-            is_struct_no_vac = True
-    except Exception:
-        pass
-
-    if output_dir is not None:
-        write(f'{output_dir}/unit_slab.cif', AseAtomsAdaptor.get_atoms(unit_slab))
-        write(f'{output_dir}/struct_with_vac.cif', AseAtomsAdaptor.get_atoms(struct_with_vac))
-        write(f'{output_dir}/struct_no_vac.cif', AseAtomsAdaptor.get_atoms(struct_no_vac))
+    # if output_dir is not None:
+    #     write(f'{output_dir}/unit_slab.cif', AseAtomsAdaptor.get_atoms(unit_slab))
+    #     write(f'{output_dir}/struct_with_vac.cif', AseAtomsAdaptor.get_atoms(struct_with_vac))
+    #     write(f'{output_dir}/struct_no_vac.cif', AseAtomsAdaptor.get_atoms(struct_no_vac))
 
     # Return chosen base OUC and flag
-    return unit_slab, is_struct_no_vac
+    
+    write(f'{index}_ouc.cif', AseAtomsAdaptor.get_atoms(ouc))
+    return ouc
 
 
 def calculate_surface_normal_from_cell(struct: Structure) -> np.ndarray:
@@ -975,7 +972,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--idx", type=int, required=True)
-    parser.add_argument("--lmdb_path", type=str, default="is2res_train_val_test_lmdbs/data/is2re/all/train/data.lmdb")
+    parser.add_argument("--lmdb_path", type=str, default="data/is2re/all/train/data.lmdb")
     parser.add_argument("--mapping_path", type=str, default="oc20_data_mapping.pkl")
     parser.add_argument("--output_dir", type=str, default="unit_slab_recon")
     parser.add_argument("--min_ab", type=float, default=8.0)
@@ -996,7 +993,7 @@ if __name__ == "__main__":
     # ============================================
     # Step 1: Get shifted_ouc (1-layer unit with shift applied)
     # ============================================
-    unit_slab, is_struct_no_vac = create_slab_from_index(
+    unit_slab = create_slab_from_index(
         index=index,
         lmdb_path=lmdb_path,
         mapping_path=mapping_path,
@@ -1007,8 +1004,6 @@ if __name__ == "__main__":
     
     print("\n=== Slab Info from Index ===")
     print(f"unit_slab (1-layer unit): {len(unit_slab)} atoms, (Saved to unit_slab.cif)")
-    if is_struct_no_vac:
-        print("  [INFO] shifted_ouc was replaced by struct_no_vac (vacuum removed)")
 
 
     # ============================================
@@ -1018,7 +1013,7 @@ if __name__ == "__main__":
     print("\n=== Starting Final Slab Reconstruction (replicating get_slab logic) ===")
 
     final_slab_recon_pmg, pred_struct, n_layers_slab, n_layers_vac, na, nb, height = reconstruct_slab_from_shifted_ouc(
-        unit_slab=unit_slab,
+        shifted_ouc=unit_slab,
         min_slab_size=args.min_slab_size,
         min_vacuum_size=args.min_vacuum_size,
         min_ab=args.min_ab,
@@ -1052,7 +1047,7 @@ if __name__ == "__main__":
     final_slab_recon = set_fixed_atom_constraints(final_slab_recon_tagged)
     
     print(f"[Reconstructed] Final slab (atoms only): {len(final_slab_recon)} atoms")
-    write(f'{output_dir}/pred_slab.cif', final_slab_recon)
+    # write(f'{output_dir}/pred_slab.cif', final_slab_recon)
 
     # ============================================
     # Step 3: Compare reconstructed structure with True structure (RMSD)

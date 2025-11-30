@@ -136,3 +136,9 @@ docs/**.json
 is2res_train_val_test_lmdbs.tar.gz
 is2res_train_val_test_lmdbs/
 oc20_data_mapping.pkl
+processing_results/
+
+# Large data files
+train_metadata.csv
+val_id_metadata.csv
+processed_data.tar

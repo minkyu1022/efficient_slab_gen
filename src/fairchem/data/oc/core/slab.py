@@ -550,8 +550,6 @@ def compute_slabs(
     bulk_atoms: ase.Atoms = None,
     max_miller: int = 2,
     specific_millers: list | None = None,
-    min_slab_size: float = 7.0,
-    min_vacuum_size: float = 20.0,
 ):
     """
     Enumerates all the symmetrically distinct slabs of a bulk structure.
@@ -571,22 +569,13 @@ def compute_slabs(
     specific_millers: list
         A list of Miller indices that you want to enumerate. If this argument
         is not `None`, then the `max_miller` argument is ignored.
-    min_slab_size: float
-        Minimum slab thickness in Angstroms (default: 7.0)
-    min_vacuum_size: float
-        Minimum vacuum layer size in Angstroms (default: 20.0)
 
     Returns
     -------
     all_slabs_info: list
-        A list of 6-tuples containing:
-        (shifted_ouc, struct_with_vac, struct_no_vac, millers, shift, top)
-        - shifted_ouc: Structure (1-layer shifted unit from oriented_unit_cell)
-        - struct_with_vac: Structure | None (slab structure with vacuum; as available)
-        - struct_no_vac: Structure | None (vacuum-free slab; as available)
-        - millers: tuple (Miller indices)
-        - shift: float
-        - top: bool (whether this is top surface)
+        A list of 5-tuples containing pymatgen structure objects for enumerated
+        slabs, the Miller indices, floats for the shifts, booleans for top, and
+        the oriented bulk structure.
     """
     assert bulk_atoms is not None
     bulk_struct = standardize_bulk(bulk_atoms)
@@ -601,47 +590,31 @@ def compute_slabs(
         slab_gen = SlabGenerator(
             initial_structure=bulk_struct,
             miller_index=millers,
-            min_slab_size=min_slab_size,
-            min_vacuum_size=min_vacuum_size,
+            min_slab_size=7.0,
+            min_vacuum_size=20.0,
             lll_reduce=False,
             center_slab=True,
             primitive=True,
             max_normal_search=1,
         )
-
-        # Call get_slabs (uses modified get_slab)
         slabs = slab_gen.get_slabs(
             tol=0.3, bonds=None, max_broken_bonds=0, symmetrize=False
         )
-        
+
         # If the bottom of the slabs are different than the tops, then we
         # want to consider them too.
         if len(slabs) != 0:
-            flipped_slabs_info = []
-            slabs_info = []
+            flipped_slabs_info = [
+                (flip_struct(slab), millers, slab.shift, False, slab.oriented_unit_cell)
+                for slab in slabs
+                if is_structure_invertible(slab) is False
+            ]
 
-            for slab in slabs:
-                # Collect three forms: shifted_ouc (1-layer), with_vac, no_vac
-                shifted_ouc = slab.oriented_unit_cell
-                struct_with_vac = getattr(slab, "struct_with_vac", None)
-                struct_no_vac = getattr(slab, "struct_no_vac", None)
-
-                # Append both top and flipped (bottom) versions
-                slabs_info.append(
-                    (shifted_ouc, struct_with_vac, struct_no_vac, millers, slab.shift, True)
-                )
-
-                flipped_slabs_info.append(
-                    (
-                        flip_struct(shifted_ouc),
-                        flip_struct(struct_with_vac) if struct_with_vac is not None else None,
-                        flip_struct(struct_no_vac) if struct_no_vac is not None else None,
-                        millers,
-                        slab.shift,
-                        False,
-                    )
-                )
-
+            # Concatenate all the results together
+            slabs_info = [
+                (slab, millers, slab.shift, True, slab.oriented_unit_cell)
+                for slab in slabs
+            ]
             all_slabs_info.extend(slabs_info + flipped_slabs_info)
 
     return all_slabs_info
